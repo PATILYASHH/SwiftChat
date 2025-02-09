@@ -9,6 +9,7 @@ import { useForm } from "react-hook-form";
 import { insertUserSchema } from "@shared/schema";
 import { useLocation } from "wouter";
 import { Loader2, MessageSquare } from "lucide-react";
+import { useEffect } from "react";
 
 export default function AuthPage() {
   const { loginMutation, registerMutation, user } = useAuth();
@@ -30,10 +31,11 @@ export default function AuthPage() {
     },
   });
 
-  if (user) {
-    setLocation("/");
-    return null;
-  }
+  useEffect(() => {
+    if (user) {
+      setLocation("/");
+    }
+  }, [user, setLocation]);
 
   return (
     <div className="min-h-screen grid md:grid-cols-2">

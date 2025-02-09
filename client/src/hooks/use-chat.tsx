@@ -24,22 +24,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket>();
 
+  // Query for getting all users
   const { data: users = [] } = useQuery<User[]>({
     queryKey: ["/api/users"],
     enabled: !!user,
   });
 
+  // Query for getting messages with selected user
   const { data: initialMessages = [] } = useQuery<Message[]>({
     queryKey: ["/api/messages", selectedUser?.id],
     enabled: !!selectedUser,
   });
 
+  // Update messages when initialMessages changes
   useEffect(() => {
     if (initialMessages) {
       setMessages(initialMessages);
     }
   }, [initialMessages]);
 
+  // WebSocket connection effect
   useEffect(() => {
     if (!user) {
       setIsConnected(false);
@@ -52,58 +56,91 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws?userId=${user.id}`;
+    let ws: WebSocket;
 
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    const connect = () => {
+      try {
+        ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
-      ws.onopen = () => {
-        setIsConnected(true);
-      };
+        ws.onopen = () => {
+          console.log('WebSocket connected');
+          setIsConnected(true);
+        };
 
-      ws.onclose = () => {
-        setIsConnected(false);
-        wsRef.current = undefined;
-      };
-
-      ws.onerror = (error) => {
-        console.error("WebSocket error:", error);
-        toast({
-          title: "Connection Error",
-          description: "Failed to connect to chat server",
-          variant: "destructive",
-        });
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "message") {
-            setMessages(prev => [...prev, data.message]);
-          } else if (data.type === "status") {
-            // Invalidate users query to refresh the list when someone's status changes
-            queryClient.invalidateQueries({ queryKey: ["/api/users"] });
-          }
-        } catch (error) {
-          console.error("Failed to process message:", error);
-        }
-      };
-
-      return () => {
-        if (wsRef.current) {
-          wsRef.current.close();
+        ws.onclose = () => {
+          console.log('WebSocket disconnected');
+          setIsConnected(false);
           wsRef.current = undefined;
-        }
-      };
-    } catch (error) {
-      console.error("WebSocket connection error:", error);
-      setIsConnected(false);
-    }
-  }, [user, toast, queryClient]);
+        };
+
+        ws.onerror = (error) => {
+          console.error("WebSocket error:", error);
+          toast({
+            title: "Connection Error",
+            description: "Failed to connect to chat server",
+            variant: "destructive",
+          });
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            console.log('Received message:', event.data);
+            const data = JSON.parse(event.data);
+
+            switch (data.type) {
+              case "message":
+                setMessages(prev => [...prev, data.message]);
+                // Mark as delivered if it's from the current selected user
+                if (data.message.senderId === selectedUser?.id && ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({
+                    type: "delivered",
+                    messageId: data.message.id,
+                    senderId: data.message.senderId
+                  }));
+                }
+                break;
+
+              case "status":
+                queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+                break;
+
+              case "delivered":
+                setMessages(prev => prev.map(msg => 
+                  msg.id === data.messageId ? { ...msg, delivered: true } : msg
+                ));
+                break;
+
+              case "read":
+                setMessages(prev => prev.map(msg => 
+                  msg.senderId === data.readerId ? { ...msg, read: true } : msg
+                ));
+                break;
+            }
+          } catch (error) {
+            console.error("Failed to process message:", error);
+          }
+        };
+      } catch (error) {
+        console.error("WebSocket connection error:", error);
+        setIsConnected(false);
+      }
+    };
+
+    connect();
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = undefined;
+      }
+    };
+  }, [user, queryClient, toast]); // Removed selectedUser from dependencies
 
   const selectUser = useCallback((user: User) => {
     setSelectedUser(user);
-  }, []);
+    queryClient.invalidateQueries({ queryKey: ["/api/messages", user.id] });
+  }, [queryClient]);
 
   const sendMessage = useCallback((content: string) => {
     if (!selectedUser || !wsRef.current || !isConnected) {
@@ -116,6 +153,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
 
     try {
+      console.log('Sending message:', { content, receiverId: selectedUser.id });
       wsRef.current.send(JSON.stringify({
         type: "message",
         content,
@@ -131,7 +169,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [selectedUser, isConnected, toast]);
 
-  const contextValue = useMemo(() => ({
+  const value = useMemo(() => ({
     users,
     selectedUser,
     messages,
@@ -141,7 +179,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }), [users, selectedUser, messages, selectUser, sendMessage, isConnected]);
 
   return (
-    <ChatContext.Provider value={contextValue}>
+    <ChatContext.Provider value={value}>
       {children}
     </ChatContext.Provider>
   );
