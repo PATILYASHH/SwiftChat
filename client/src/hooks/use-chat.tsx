@@ -1,14 +1,17 @@
 import { createContext, ReactNode, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Message, User } from "@shared/schema";
+import { Message, User, GroupMessage } from "@shared/schema";
 import { useAuth } from "./use-auth";
 import { useToast } from "./use-toast";
+import { useGroups } from "./use-groups";
+
+type ChatMessage = Message | GroupMessage;
 
 type ChatContextType = {
   users: User[];
   selectedUser: User | null;
-  messages: Message[];
-  selectUser: (user: User) => void;
+  messages: ChatMessage[];
+  selectUser: (user: User | null) => void;
   sendMessage: (content: string) => void;
   isConnected: boolean;
 };
@@ -18,11 +21,13 @@ const ChatContext = createContext<ChatContextType | null>(null);
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { selectedGroup } = useGroups();
   const queryClient = useQueryClient();
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket>();
+  const reconnectTimeoutRef = useRef<number>();
 
   // Query for getting all users
   const { data: users = [] } = useQuery<User[]>({
@@ -38,7 +43,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Update messages when initialMessages changes
   useEffect(() => {
-    if (initialMessages) {
+    if (initialMessages.length > 0) {
       setMessages(initialMessages);
     }
   }, [initialMessages]);
@@ -54,36 +59,64 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws?userId=${user.id}`;
     let ws: WebSocket;
+    let isCleanup = false;
 
     const connect = () => {
+      if (isCleanup) return;
+
       try {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${window.location.host}/ws?userId=${user.id}`;
+
+        console.log('Connecting to WebSocket:', wsUrl);
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
           console.log('WebSocket connected');
           setIsConnected(true);
+          if (reconnectTimeoutRef.current) {
+            window.clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = undefined;
+          }
+
+          // Join group if selected
+          if (selectedGroup) {
+            ws.send(JSON.stringify({
+              type: "join_group",
+              groupAddress: selectedGroup.address
+            }));
+          }
         };
 
         ws.onclose = () => {
           console.log('WebSocket disconnected');
-          setIsConnected(false);
-          wsRef.current = undefined;
+          if (!isCleanup) {
+            setIsConnected(false);
+            wsRef.current = undefined;
+
+            // Attempt to reconnect after 3 seconds
+            reconnectTimeoutRef.current = window.setTimeout(() => {
+              console.log('Attempting to reconnect...');
+              connect();
+            }, 3000);
+          }
         };
 
         ws.onerror = (error) => {
           console.error("WebSocket error:", error);
-          toast({
-            title: "Connection Error",
-            description: "Failed to connect to chat server",
-            variant: "destructive",
-          });
+          if (!isCleanup) {
+            toast({
+              title: "Connection Error",
+              description: "Failed to connect to chat server",
+              variant: "destructive",
+            });
+          }
         };
 
         ws.onmessage = (event) => {
+          if (isCleanup) return;
           try {
             console.log('Received message:', event.data);
             const data = JSON.parse(event.data);
@@ -101,20 +134,51 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 }
                 break;
 
+              case "group_message":
+                setMessages(prev => [...prev, data.message]);
+                break;
+
+              case "group_messages":
+                if (data.messages) {
+                  setMessages(data.messages);
+                }
+                break;
+
+              case "group_joined":
+                toast({
+                  title: "Group Joined",
+                  description: `Successfully joined ${data.group.name}`,
+                });
+                break;
+
               case "status":
                 queryClient.invalidateQueries({ queryKey: ["/api/users"] });
                 break;
 
               case "delivered":
-                setMessages(prev => prev.map(msg => 
-                  msg.id === data.messageId ? { ...msg, delivered: true } : msg
-                ));
+                setMessages(prev => prev.map(msg => {
+                  if ('delivered' in msg && msg.id === data.messageId) {
+                    return { ...msg, delivered: true };
+                  }
+                  return msg;
+                }));
                 break;
 
               case "read":
-                setMessages(prev => prev.map(msg => 
-                  msg.senderId === data.readerId ? { ...msg, read: true } : msg
-                ));
+                setMessages(prev => prev.map(msg => {
+                  if ('read' in msg && msg.senderId === data.readerId) {
+                    return { ...msg, read: true };
+                  }
+                  return msg;
+                }));
+                break;
+
+              case "error":
+                toast({
+                  title: "Error",
+                  description: data.message,
+                  variant: "destructive",
+                });
                 break;
             }
           } catch (error) {
@@ -123,42 +187,60 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         };
       } catch (error) {
         console.error("WebSocket connection error:", error);
-        setIsConnected(false);
+        if (!isCleanup) {
+          setIsConnected(false);
+        }
       }
     };
 
     connect();
 
     return () => {
+      isCleanup = true;
+      if (reconnectTimeoutRef.current) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+      }
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = undefined;
       }
     };
-  }, [user, queryClient, toast]); // Removed selectedUser from dependencies
+  }, [user, queryClient, toast, selectedGroup]);
 
-  const selectUser = useCallback((user: User) => {
+  const selectUser = useCallback((user: User | null) => {
     setSelectedUser(user);
-    queryClient.invalidateQueries({ queryKey: ["/api/messages", user.id] });
+    setMessages([]); // Clear messages when switching users
+    if (user) {
+      queryClient.invalidateQueries({ queryKey: ["/api/messages", user.id] });
+    }
   }, [queryClient]);
 
   const sendMessage = useCallback((content: string) => {
-    if (!selectedUser || !wsRef.current || !isConnected) {
+    if (!wsRef.current || !isConnected) {
       toast({
         title: "Cannot send message",
-        description: "Please ensure you're connected and have selected a recipient",
+        description: "Please ensure you're connected to the chat server",
         variant: "destructive",
       });
       return;
     }
 
     try {
-      console.log('Sending message:', { content, receiverId: selectedUser.id });
-      wsRef.current.send(JSON.stringify({
-        type: "message",
-        content,
-        receiverId: selectedUser.id
-      }));
+      if (selectedGroup) {
+        console.log('Sending group message:', { content, groupId: selectedGroup.id });
+        wsRef.current.send(JSON.stringify({
+          type: "group_message",
+          groupId: selectedGroup.id,
+          content
+        }));
+      } else if (selectedUser) {
+        console.log('Sending direct message:', { content, receiverId: selectedUser.id });
+        wsRef.current.send(JSON.stringify({
+          type: "message",
+          content,
+          receiverId: selectedUser.id
+        }));
+      }
     } catch (error) {
       console.error("Failed to send message:", error);
       toast({
@@ -167,7 +249,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         variant: "destructive",
       });
     }
-  }, [selectedUser, isConnected, toast]);
+  }, [selectedUser, selectedGroup, isConnected, toast]);
 
   const value = useMemo(() => ({
     users,

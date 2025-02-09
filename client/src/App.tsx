@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import NotFound from "@/pages/not-found";
 import { AuthProvider } from "./hooks/use-auth";
 import { ChatProvider } from "./hooks/use-chat";
+import { GroupsProvider } from "./hooks/use-groups";
 import HomePage from "./pages/home-page";
 import AuthPage from "./pages/auth-page";
 import { ProtectedRoute } from "./lib/protected-route";
@@ -23,10 +24,12 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <ChatProvider>
-          <Router />
-          <Toaster />
-        </ChatProvider>
+        <GroupsProvider>
+          <ChatProvider>
+            <Router />
+            <Toaster />
+          </ChatProvider>
+        </GroupsProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

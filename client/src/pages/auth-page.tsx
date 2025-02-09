@@ -5,11 +5,11 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, UseFormReturn } from "react-hook-form";
 import { insertUserSchema } from "@shared/schema";
+import { useMemo } from "react";
 import { useLocation } from "wouter";
 import { Loader2, MessageSquare } from "lucide-react";
-import { useEffect } from "react";
 
 export default function AuthPage() {
   const { loginMutation, registerMutation, user } = useAuth();
@@ -31,7 +31,8 @@ export default function AuthPage() {
     },
   });
 
-  useEffect(() => {
+  // Use useMemo to prevent recreating the effect on every render
+  useMemo(() => {
     if (user) {
       setLocation("/");
     }
