@@ -60,15 +60,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const connect = useCallback(() => {
     if (!user) return;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const API_URL = import.meta.env.VITE_API_URL || '';
+    const wsProtocol = API_URL.startsWith('https') ? 'wss:' : 'ws:';
+    const wsUrl = API_URL ? 
+      `${API_URL.replace(/^https?:\/\//, `${wsProtocol}://`)}/ws` : 
+      `${wsProtocol}//${window.location.host}/ws`;
 
     console.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
-
-    // Add this line to ensure cookies are sent with WebSocket connection
-    ws.withCredentials = true;
 
     ws.onopen = () => {
       console.log('WebSocket connected');
