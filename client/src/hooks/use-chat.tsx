@@ -61,11 +61,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!user) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws?userId=${user.id}`;
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
 
     console.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+
+    // Add this line to ensure cookies are sent with WebSocket connection
+    ws.withCredentials = true;
 
     ws.onopen = () => {
       console.log('WebSocket connected');
@@ -113,7 +116,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       console.error("WebSocket error:", error);
       toast({
         title: "Connection Error",
-        description: "Failed to connect to chat server",
+        description: "Failed to connect to chat server. Please ensure you're logged in.",
         variant: "destructive",
       });
     };
@@ -125,13 +128,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         switch (data.type) {
           case "message":
+            // Update messages state with the new message
             setMessages(prev => {
               // Avoid duplicate messages
               if (!prev.some(m => m.id === data.message.id)) {
-                return [...prev, data.message];
+                return [...prev, data.message].sort((a, b) =>
+                  new Date(a.sent).getTime() - new Date(b.sent).getTime()
+                );
               }
               return prev;
             });
+
             // Mark as delivered if it's from the current selected user
             if (data.message.senderId === selectedUser?.id && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({
@@ -145,7 +152,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           case "group_message":
             setMessages(prev => {
               if (!prev.some(m => m.id === data.message.id)) {
-                return [...prev, data.message];
+                return [...prev, data.message].sort((a, b) =>
+                  new Date(a.sent).getTime() - new Date(b.sent).getTime()
+                );
               }
               return prev;
             });
@@ -153,7 +162,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           case "group_messages":
             if (data.messages) {
-              setMessages(data.messages);
+              setMessages(data.messages.sort((a: GroupMessage, b: GroupMessage) =>
+                new Date(a.sent).getTime() - new Date(b.sent).getTime()
+              ));
             }
             break;
 
