@@ -28,7 +28,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket>();
   const reconnectTimeoutRef = useRef<number>();
-  const messageQueueRef = useRef<Array<{ type: string; content: string }>>([]);
+  const messageQueueRef = useRef<Array<{ type: string; content: string; receiverId?: number; groupId?: number }>>([]);
 
   // Query for getting all users
   const { data: users = [] } = useQuery<User[]>({
@@ -60,12 +60,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const connect = useCallback(() => {
     if (!user) return;
 
-    let ws: WebSocket;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws?userId=${user.id}`;
 
     console.log('Connecting to WebSocket:', wsUrl);
-    ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -81,7 +80,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       while (messageQueueRef.current.length > 0) {
         const msg = messageQueueRef.current.shift();
         if (msg) {
-          ws.send(JSON.stringify(msg));
+          try {
+            ws.send(JSON.stringify(msg));
+          } catch (error) {
+            console.error('Failed to send queued message:', error);
+          }
         }
       }
 
@@ -195,6 +198,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         console.error("Failed to process message:", error);
       }
     };
+
+    return () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
   }, [user, queryClient, toast, selectedUser, selectedGroup]);
 
   // WebSocket connection effect
@@ -208,18 +217,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    let isCleanup = false;
-
-    connect();
+    const cleanup = connect();
 
     return () => {
-      isCleanup = true;
       if (reconnectTimeoutRef.current) {
         window.clearTimeout(reconnectTimeoutRef.current);
       }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = undefined;
+      if (cleanup) {
+        cleanup();
       }
     };
   }, [user, connect]);
@@ -233,32 +238,33 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const sendMessage = useCallback((content: string) => {
-    if (!wsRef.current || !isConnected) {
+    if (!content.trim()) return;
+
+    if (!isConnected) {
       toast({
         title: "Cannot send message",
-        description: "Please ensure you're connected to the chat server",
+        description: "Please wait while we reconnect to the chat server",
         variant: "destructive",
       });
       return;
     }
 
+    const message = {
+      type: selectedGroup ? "group_message" : "message",
+      content,
+      ...(selectedGroup ? { groupId: selectedGroup.id } : { receiverId: selectedUser?.id })
+    };
+
+    console.log('Sending message:', message);
+
     try {
-      const message = {
-        type: selectedGroup ? "group_message" : "message",
-        content,
-        ...(selectedGroup ? { groupId: selectedGroup.id } : { receiverId: selectedUser?.id })
-      };
-
-      console.log('Sending message:', message);
-
-      if (wsRef.current.readyState === WebSocket.OPEN) {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify(message));
       } else {
         // Queue message if not connected
         messageQueueRef.current.push(message);
-        // Attempt to reconnect
-        if (wsRef.current.readyState === WebSocket.CLOSED) {
-          wsRef.current = undefined;
+        // Attempt to reconnect if closed
+        if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
           connect();
         }
       }
