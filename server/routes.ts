@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { insertMessageSchema } from "@shared/schema";
@@ -32,7 +32,7 @@ export function registerRoutes(app: Express): Server {
     ws.on("message", async (data) => {
       try {
         const msg = JSON.parse(data.toString()) as WSMessage;
-        
+
         if (msg.type === "message" && msg.receiverId && msg.content) {
           const message = await storage.createMessage({
             senderId: userId,
@@ -65,7 +65,7 @@ export function registerRoutes(app: Express): Server {
       online,
     });
 
-    for (const client of clients.values()) {
+    for (const [, client] of clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(message);
       }
@@ -82,10 +82,10 @@ export function registerRoutes(app: Express): Server {
     if (!req.isAuthenticated()) return res.sendStatus(401);
     const otherUserId = parseInt(req.params.userId);
     if (isNaN(otherUserId)) return res.sendStatus(400);
-    
+
     const messages = await storage.getMessages(req.user!.id, otherUserId);
     await storage.markMessagesAsRead(otherUserId, req.user!.id);
-    
+
     const otherWs = clients.get(otherUserId);
     if (otherWs?.readyState === WebSocket.OPEN) {
       otherWs.send(JSON.stringify({ 
@@ -93,7 +93,7 @@ export function registerRoutes(app: Express): Server {
         readerId: req.user!.id
       }));
     }
-    
+
     res.json(messages);
   });
 
