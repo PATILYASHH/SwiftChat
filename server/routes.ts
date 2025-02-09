@@ -35,6 +35,9 @@ export function registerRoutes(app: Express): Server {
     storage.setUserOnline(userId, true);
     broadcastUserStatus(userId, true);
 
+    // Send any pending messages
+    storage.markMessagesAsDelivered(userId);
+
     ws.on("message", async (data) => {
       try {
         const msg = JSON.parse(data.toString()) as WSMessage;
@@ -54,9 +57,20 @@ export function registerRoutes(app: Express): Server {
               if (receiverWs?.readyState === WebSocket.OPEN) {
                 console.log('Sending message to receiver:', msg.receiverId);
                 receiverWs.send(JSON.stringify({ type: "message", message }));
+
+                // Automatically mark as delivered since receiver is online
+                message.delivered = true;
+                await storage.markMessagesAsDelivered(msg.receiverId);
+
+                // Notify sender that message was delivered
+                ws.send(JSON.stringify({
+                  type: "delivered",
+                  messageId: message.id,
+                  receiverId: msg.receiverId
+                }));
               }
 
-              // Send back to sender with the created message
+              // Always send back to sender with the created message
               console.log('Sending message back to sender:', userId);
               ws.send(JSON.stringify({ type: "message", message }));
             }
@@ -86,6 +100,7 @@ export function registerRoutes(app: Express): Server {
                   memberWs.send(JSON.stringify({ 
                     type: "group_message", 
                     message,
+                    groupId: msg.groupId
                   }));
                 }
               });
@@ -142,7 +157,6 @@ export function registerRoutes(app: Express): Server {
 
           case "delivered":
             if (msg.messageId && msg.senderId) {
-              await storage.markMessagesAsDelivered(userId);
               const senderWs = clients.get(msg.senderId);
               if (senderWs?.readyState === WebSocket.OPEN) {
                 senderWs.send(JSON.stringify({
@@ -181,14 +195,39 @@ export function registerRoutes(app: Express): Server {
       online,
     });
 
-    Array.from(clients.entries()).forEach(([, client]) => {
+    clients.forEach(client => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(message);
       }
     });
   }
 
-  // HTTP endpoints for groups
+  // HTTP endpoints
+  app.get("/api/messages/:userId", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+    const otherUserId = parseInt(req.params.userId);
+    if (isNaN(otherUserId)) return res.sendStatus(400);
+
+    const messages = await storage.getMessages(req.user!.id, otherUserId);
+    await storage.markMessagesAsRead(otherUserId, req.user!.id);
+
+    const otherWs = clients.get(otherUserId);
+    if (otherWs?.readyState === WebSocket.OPEN) {
+      otherWs.send(JSON.stringify({ 
+        type: "read",
+        readerId: req.user!.id
+      }));
+    }
+
+    res.json(messages);
+  });
+
+  app.get("/api/users", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+    const users = await storage.getAllUsers();
+    res.json(users.filter(u => u.id !== req.user!.id));
+  });
+
   app.post("/api/groups", async (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
 
@@ -236,32 +275,6 @@ export function registerRoutes(app: Express): Server {
     }
 
     const messages = await storage.getGroupMessages(groupId);
-    res.json(messages);
-  });
-
-  // Existing user and message endpoints
-  app.get("/api/users", async (req, res) => {
-    if (!req.isAuthenticated()) return res.sendStatus(401);
-    const users = await storage.getAllUsers();
-    res.json(users.filter(u => u.id !== req.user!.id));
-  });
-
-  app.get("/api/messages/:userId", async (req, res) => {
-    if (!req.isAuthenticated()) return res.sendStatus(401);
-    const otherUserId = parseInt(req.params.userId);
-    if (isNaN(otherUserId)) return res.sendStatus(400);
-
-    const messages = await storage.getMessages(req.user!.id, otherUserId);
-    await storage.markMessagesAsRead(otherUserId, req.user!.id);
-
-    const otherWs = clients.get(otherUserId);
-    if (otherWs?.readyState === WebSocket.OPEN) {
-      otherWs.send(JSON.stringify({ 
-        type: "read",
-        readerId: req.user!.id
-      }));
-    }
-
     res.json(messages);
   });
 
