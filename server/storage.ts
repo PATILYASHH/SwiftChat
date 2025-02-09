@@ -10,12 +10,12 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   setUserOnline(id: number, online: boolean): Promise<void>;
   getAllUsers(): Promise<User[]>;
-  
+
   createMessage(message: InsertMessage): Promise<Message>;
   getMessages(user1Id: number, user2Id: number): Promise<Message[]>;
   markMessagesAsDelivered(receiverId: number): Promise<void>;
   markMessagesAsRead(senderId: number, receiverId: number): Promise<void>;
-  
+
   sessionStore: session.Store;
 }
 
@@ -56,7 +56,8 @@ export class MemStorage implements IStorage {
   async setUserOnline(id: number, online: boolean): Promise<void> {
     const user = await this.getUser(id);
     if (user) {
-      this.users.set(id, { ...user, online });
+      user.online = online;
+      this.users.set(id, user);
     }
   }
 
@@ -78,27 +79,30 @@ export class MemStorage implements IStorage {
   }
 
   async getMessages(user1Id: number, user2Id: number): Promise<Message[]> {
-    return Array.from(this.messages.values()).filter(
-      (msg) =>
+    return Array.from(this.messages.values())
+      .filter(msg => 
         (msg.senderId === user1Id && msg.receiverId === user2Id) ||
-        (msg.senderId === user2Id && msg.receiverId === user1Id),
-    ).sort((a, b) => a.sent.getTime() - b.sent.getTime());
+        (msg.senderId === user2Id && msg.receiverId === user1Id)
+      )
+      .sort((a, b) => a.sent.getTime() - b.sent.getTime());
   }
 
   async markMessagesAsDelivered(receiverId: number): Promise<void> {
-    for (const [id, message] of this.messages) {
+    Array.from(this.messages.entries()).forEach(([id, message]) => {
       if (message.receiverId === receiverId && !message.delivered) {
-        this.messages.set(id, { ...message, delivered: true });
+        message.delivered = true;
+        this.messages.set(id, message);
       }
-    }
+    });
   }
 
   async markMessagesAsRead(senderId: number, receiverId: number): Promise<void> {
-    for (const [id, message] of this.messages) {
+    Array.from(this.messages.entries()).forEach(([id, message]) => {
       if (message.senderId === senderId && message.receiverId === receiverId && !message.read) {
-        this.messages.set(id, { ...message, read: true });
+        message.read = true;
+        this.messages.set(id, message);
       }
-    }
+    });
   }
 }
 

@@ -1,5 +1,5 @@
 import { createContext, ReactNode, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Message, User } from "@shared/schema";
 import { useAuth } from "./use-auth";
 import { useToast } from "./use-toast";
@@ -18,6 +18,7 @@ const ChatContext = createContext<ChatContextType | null>(null);
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -79,6 +80,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const data = JSON.parse(event.data);
           if (data.type === "message") {
             setMessages(prev => [...prev, data.message]);
+          } else if (data.type === "status") {
+            // Invalidate users query to refresh the list when someone's status changes
+            queryClient.invalidateQueries({ queryKey: ["/api/users"] });
           }
         } catch (error) {
           console.error("Failed to process message:", error);
@@ -95,7 +99,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       console.error("WebSocket connection error:", error);
       setIsConnected(false);
     }
-  }, [user, toast]);
+  }, [user, toast, queryClient]);
 
   const selectUser = useCallback((user: User) => {
     setSelectedUser(user);

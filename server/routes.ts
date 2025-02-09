@@ -65,11 +65,12 @@ export function registerRoutes(app: Express): Server {
       online,
     });
 
-    for (const [, client] of clients) {
+    // Use Array.from to avoid TypeScript iteration error
+    Array.from(clients.entries()).forEach(([, client]) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(message);
       }
-    }
+    });
   }
 
   app.get("/api/users", async (req, res) => {
