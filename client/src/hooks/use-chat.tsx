@@ -56,11 +56,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
-      ws.onopen = () => setIsConnected(true);
+      ws.onopen = () => {
+        setIsConnected(true);
+      };
+
       ws.onclose = () => {
         setIsConnected(false);
         wsRef.current = undefined;
       };
+
       ws.onerror = (error) => {
         console.error("WebSocket error:", error);
         toast({
